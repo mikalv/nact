@@ -60,7 +60,7 @@ this actor doesn't require any state, we can use the simpler `spawnFixed` functi
 const greeterActor = system.spawnFixed((msg) => console.log(`Hello ${msg.name}`), 'greeter');
 ```
 
-The first argument to `spawnFixed` is a function which is invoked when a message is received. It is important to note that this function cannot reference anything outside the scope of the function. This is because the actor is running in a separate thread and thus can't share memory with the main process. 
+The first argument to `spawnFixed` is a function which is invoked when a message is received. 
 
 The second argument to `spawnFixed` is the name of the actor,
 which in this case is `'greeter'`. The name field is optional, and 
@@ -173,7 +173,7 @@ let actor = system.spawnFixed(function(msg){
 });
 ```
 
-To stop an actor, you can call stop on the actor object e.g. `actor.stop()`. If you want to immediately terminate the actor, you can call `actor.terminate()`. These two methods are quite ungraceful, and often a better alternative is to shutdown the actor from the inside. If you spawned the actor using spawnFixed, you can stop the actor function after receiving a message, by returning `false`. If you instead created the actor using the spawn command, stopping the actor is as simple as not returning the next handler function.
+To stop an actor, you can call stop on the actor object e.g. `actor.stop()`. If you want to immediately terminate the actor, you can call `actor.terminate()`. These two methods are quite ungraceful, and often a better alternative is to shutdown the actor from the inside. If you spawned the actor using spawnFixed, you can stop the actor function after by returning `false` in response to a message. If you instead created the actor using the spawn command, stopping the actor is as simple as not returning the next handler function.
 
 Using spawn:
 ```js
@@ -193,19 +193,17 @@ let actor = system.spawnFixed(function(msg){
 An actor by default is also terminated when it throws an exception, unless an actor is taken by a supervisor.
 
 To check whether an actor is stopped, you can call `isStopped()` on the actor object. You can obtain a Map of an actor's children by calling children() on the actor object or `ctx.children` from inside the actor function.
-Likewise, to get the parent of an actor you can call `parent()` on the actor object or `parent` on the context object.
+Likewise, to get the parent of an actor you can call `parent` on the actor or context object.
 
 Children can be stopped from inside the actor by calling `child.stop()`
 
 ## Supervision 
 
-NAct empowers parent actors to monitor their children. This is strictly on an opt in basis.
-If a child crashes and a parent has opted into receiving death messages, the message handler 
-of the parent actor will be called with the following payload.
-
+NAct empowers parent actors to monitor their children. This is strictly on an opt in basis. 
+By default, an actor is stopped upon faulting, but a parent may override this behaviour by 
+ 
 ```js
 { type: 'CHILD_FAILED', child, exception, failure_context }
 ``` 
 
-This message gives the actor an opportunity to recover from the failure. They could for example call `child.restart()`, 
-
+This message gives the actor an opportunity to recover from the failure. They could for example call `child.restart()`

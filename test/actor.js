@@ -7,33 +7,19 @@ const { Promise } = require('bluebird');
 const { LocalPath } = require('../lib/paths');
 const { ActorReference } = require('../lib/references');
 const { Actor } = require('../lib/actor');
+const { ignore, retry } = require('./util');
 const delay = Promise.delay;
 
 const spawnChildrenEchoer = (parent, name) => parent.spawnFixed((msg, { sender, children, tell }) => {
   tell(sender, [...children.keys()]);
 }, name);
 
-const ignore = () => { };
-
-const retry = async (assertion, remainingAttempts, retryInterval = 0) => {
-  if (remainingAttempts <= 1) {
-    return assertion();
-  } else {
-    try {
-      assertion();
-    } catch (e) {
-      await delay(retryInterval);
-      await retry(assertion, remainingAttempts - 1, retryInterval);
-    }
-  }
-};
-
 describe('ActorReference', function () {
   let system = undefined;
   beforeEach(() => system = start());
   afterEach(() => system.terminate());
 
-  it('should have name, path, parent, properties', function () {
+  it('should have properties: name, path, parent,', function () {
     let child = system.spawnFixed(ignore);
     let grandchild = child.spawnFixed(ignore);
     child.parent.should.equal(system);
@@ -42,18 +28,36 @@ describe('ActorReference', function () {
     child.path.should.be.instanceOf(LocalPath);
   });
 
-});
-
-describe('Actor', function () {
-  describe('actor-function', function () {
-    let system = undefined;
-    beforeEach(() => system = start());
-    afterEach(() => system.terminate());
+  describe('function', function () {
+    it(`should have the following properties in its context object: 
+        - name
+        - path
+        - self
+        - parent
+        - sender
+        - tell
+        - spawn
+        - spawnFixed`,
+      async function () {
+        let child = system.spawnFixed(async function (_, context) {
+          this.tell(this.sender, context);
+        });
+        let context = await child.ask();
+        context.should.include.keys(
+          'name',
+          'path',
+          'self',
+          'parent',
+          'sender',
+          'tell',
+          'spawn',
+          'spawnFixed'
+        );
+      });
 
     it('allows promises to resolve inside actor', async function () {
-      const getMockValue = () => Promise.resolve(2);
       let child = system.spawnFixed(async function (msg) {
-        let result = await getMockValue();
+        let result = await Promise.resolve(2);
         this.tell(this.sender, result);
       });
 
@@ -61,14 +65,28 @@ describe('Actor', function () {
       result.should.equal(2);
     });
 
-    it('allows promises to resolve as false inside an actor created with spawnFixed, subsequently teriminating it.', async function () {
+    it('stops actor when returning a promise which resolves to false.', async function () {
       let child = system.spawnFixed(() => Promise.resolve(false));
       child.tell();
       await retry(() => child.isStopped().should.be.true, 12, 10);
     });
 
-    it('allows statful behaviour via trampolining', async function () {
-      let actor = system.spawn(() => {
+    it('stops actor after returning a falsy value when started with spawnFixed', async function () {
+      let child = system.spawnFixed(() => false, 'testActor');
+      child.tell();
+      await retry(() => child.isStopped().should.be.true, 12, 10);
+      system.children().should.not.include('testActor');
+    });
+
+    it('stops actor after returning a non-function when started with spawn', async function () {
+      let child = system.spawn(() => (msg) => { }, 'testActor');
+      child.tell();
+      await retry(() => child.isStopped().should.be.true, 12, 10);
+      system.children().should.not.include('testActor');
+    });
+
+    it('allows statful behaviour using trampolining', async function () {
+      let statefulActor = system.spawn(() => {
         let initialState = '';
         let f = (state) => function (msg) {
           if (msg.type === 'query') {
@@ -81,14 +99,14 @@ describe('Actor', function () {
         return f(initialState);
       });
 
-      actor.tell({ payload: 'Hello ', type: 'append' });
-      actor.tell({ payload: 'World. ', type: 'append' });
-      actor.tell({ payload: 'The time has come!!', type: 'append' });
-      let result = await actor.ask({ type: 'query' });
+      statefulActor.tell({ payload: 'Hello ', type: 'append' });
+      statefulActor.tell({ payload: 'World. ', type: 'append' });
+      statefulActor.tell({ payload: 'The time has come!!', type: 'append' });
+      let result = await statefulActor.ask({ type: 'query' });
       result.should.equal('Hello World. The time has come!!');
     });
 
-    it('evalutes in order when returning a promise from the actor function', async function () {
+    it('evalutes in order, even when returning a promise', async function () {
       let child = system.spawnFixed(async function (msg) {
         if (msg === 2) {
           await delay(10);
@@ -104,15 +122,13 @@ describe('Actor', function () {
       result3.should.equal(3);
     });
 
-    it('should automatically terminate with failure if non function/falsy type is returned', async function () {
-      // TODO: Possibly not the most sensible error policy. 
-      // Really need to think about how supervision and error handling work
+    it('should automatically terminate actor with failure if a non function or falsy type is returned', async function () {
       let child = system.spawn((msg) => () => 1);
       child.tell();
       await retry(() => child.isStopped().should.be.true, 12, 10);
     });
 
-    it('should automatically terminate if error is thrown', async function () {
+    it('should automatically terminate actor if an error is thrown', async function () {
       // TODO: Possibly not the most sensible error policy. 
       // Really need to think about how supervision and error handling work
       let child = system.spawnFixed((msg) => { throw new Error('testError') });
@@ -120,20 +136,15 @@ describe('Actor', function () {
       await retry(() => child.isStopped().should.be.true, 12, 10);
     });
 
-    it('should automatically terminate if rejected promise is thrown', async function () {
+    it('should terminate actor if rejected promise is thrown', async function () {
       let child = system.spawnFixed((msg) => Promise.reject(new Error('testError')));
       child.tell();
       await retry(() => child.isStopped().should.be.true, 12, 10);
     });
 
-  })
+  });
 
   describe('#stop()', function () {
-
-    let system = undefined;
-    beforeEach(() => system = start());
-    afterEach(() => system.terminate());
-
     it('should prevent children from being spawned after being called', function () {
       let child = system.spawnFixed(ignore);
       child.stop();
@@ -159,19 +170,6 @@ describe('Actor', function () {
       child2.isStopped().should.be.true;
     });
 
-    it('is invoked automatically when a fixed function returns false', async function () {
-      let child = system.spawnFixed(() => false, 'testActor');
-      child.tell();
-      await retry(() => child.isStopped().should.be.true, 12, 10);
-      system.children().should.not.include('testActor');
-    });
-
-    it('is invoked automatically when a function is not returned', async function () {
-      let child = system.spawn(() => (msg) => { }, 'testActor');
-      child.tell();
-      await retry(() => child.isStopped().should.be.true, 12, 10);
-      system.children().should.not.include('testActor');
-    });
 
     it('should be able to be invoked multiple times', async function () {
       let child = system.spawn(ignore);
@@ -183,17 +181,14 @@ describe('Actor', function () {
 
     it('should ignore subsequent tells', async function () {
       let child = system.spawnFixed(() => { throw new Error('Should not be triggered'); });
-      child.stop();      
-      await retry(() => child.isStopped().should.be.true, 12, 10);      
+      child.stop();
+      await retry(() => child.isStopped().should.be.true, 12, 10);
       child.tell('test');
     });
 
   });
 
   describe('#terminate()', function () {
-    let system = undefined;
-    beforeEach(() => system = start());
-    afterEach(() => system.terminate());
 
     it('should prevent children from being spawned after being called', function () {
       let child = system.spawnFixed(() => console.log('spawning'));
@@ -233,11 +228,6 @@ describe('Actor', function () {
   });
 
   describe('#spawn()', function () {
-
-    let system = undefined;
-    beforeEach(() => system = start());
-    afterEach(() => system.terminate());
-
     it('automatically names an actor if a name is not provided', function () {
       let child = system.spawnFixed((msg) => msg);
       system.children().size.should.equal(1);
@@ -281,12 +271,10 @@ describe('Actor', function () {
       children.should.have.members(['child1', 'child2']);
       actor.children().should.have.keys('child1', 'child2');
     });
+
   });
 
   describe('#ask()', function () {
-    let system = undefined;
-    beforeEach(() => system = start());
-    afterEach(() => system.terminate());
 
     it(`should reject a promise if actor has already stopped`, function () {
       let actor = system.spawnFixed(ignore);
@@ -314,9 +302,6 @@ describe('Actor', function () {
   });
 
   describe('#tell()', function () {
-    let system = undefined;
-    beforeEach(() => system = start());
-    afterEach(() => system.terminate());
 
     it('telling inside actor with non addressable recipient type should throw error', async function () {
       let child = system.spawnFixed(function (msg) {

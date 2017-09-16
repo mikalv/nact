@@ -7,19 +7,19 @@ const { LocalPath } = require('../lib/paths');
 const { Nobody } = require('../lib/nobody');
 const { Promise } = require('bluebird');
 const delay = Promise.delay;
+const { ignore } = require('./util');
 
-const ignore = () => {};
 
 describe('System', function () {
-    
+
     describe('#spawn()', function () {
         let system = undefined;
         beforeEach(() => system = start());
         afterEach(() => system.terminate());
 
         it('should prevent a child with the same name from being spawned', function () {
-            system.spawnFixed(() => console.log('hello'), 'child1');
-            (() => system.spawnFixed(() => console.log('hello'), 'child1')).should.throw(Error);
+            system.spawnFixed(ignore, 'child1');
+            (() => system.spawnFixed(ignore, 'child1')).should.throw(Error);
         });
     });
 
